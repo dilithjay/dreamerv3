@@ -1,8 +1,10 @@
 """Reacher LoCA environment for the JAX DreamerV3 (embodied.Env).
 
-Native port of r2dreamer/envs/dmc_loca.py. The underlying dm_control task
-"reacherloca" must be registered by the host environment (the patched
-dm_control used by the LoCA_v3 / Dreamer_v1_Ali setup).
+Native port of r2dreamer/envs/dmc_loca.py. The `reacherloca` dm_control task is
+vendored in reacherloca_task.py (+ reacherloca.xml) and built directly via its
+`easy`/`hard` factory functions, so it runs on a stock wheelhouse dm_control
+1.0.x + mujoco install (python 3.11) without patching site-packages or needing
+the legacy py3.8 dm_control 0.0.x that registered a `reacherloca` suite domain.
 
 LoCA via `set_phase_and_eval(phase, is_eval)`:
   * phase 1: standard reacher (reach target_1).
@@ -20,7 +22,7 @@ class ReacherLoca(embodied.Env):
 
   def __init__(self, task='easy', size=(64, 64), camera=0, loca_phase='phase_1',
                loca_mode='train', one_way_wall_radius=0.1, seed=0):
-    from dm_control import suite
+    from . import reacherloca_task
     self._size = tuple(size)
     self._camera = camera
     self._loca_phase = loca_phase
@@ -28,7 +30,8 @@ class ReacherLoca(embodied.Env):
     self._one_way_wall_radius = one_way_wall_radius
     self._done = True
 
-    self._env = suite.load('reacherloca', task, task_kwargs={'random': seed})
+    ctor = {'easy': reacherloca_task.easy, 'hard': reacherloca_task.hard}[task]
+    self._env = ctor(random=seed)
     if self._loca_phase != 'phase_1':
       self._env._task.switch_loca_task()
 

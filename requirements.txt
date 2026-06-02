@@ -10,9 +10,13 @@
 #     here (that pulls nvidia-* CUDA wheels from PyPI) unless using the PyPI
 #     fallback documented in install_venv.sh.
 #   * nvidia-cuda-nvcc-cu12 dropped (only needed for the PyPI-CUDA fallback path).
-#   * dm_control pinned to 0.0.403778684 (pre-1.0, ctypes/MuJoCo 2.1.0) to match
-#     the LoCA_v3 / Dreamer_v1_Ali setup that registers the `reacherloca` domain.
-#     Installed from PyPI --no-deps (wheelhouse only has dm_control 1.0.28).
+#   * dm_control 1.0.28 (wheelhouse) + mujoco 3.3.0 (PyPI prebuilt wheel; the
+#     Alliance wheelhouse does NOT carry mujoco). Modern stack, python 3.11. The
+#     legacy py3.8 dm_control 0.0.x that registered a `reacherloca` suite domain
+#     is incompatible with python 3.11 / jax 0.5.0, so the reacherloca task is
+#     vendored (embodied/envs/reacherloca_task.py + reacherloca.xml) and built
+#     directly -- no suite-domain registration needed. The mujoco wheel is
+#     self-contained (bundles libmujoco + EGL/GLFW/OSMesa); no native staging.
 #   * gym-minigrid + classic gym added for the MiniGrid LoCA env.
 
 # --- Core JAX stack (Alliance wheelhouse) ---
@@ -38,8 +42,9 @@ ipdb
 tqdm
 
 # --- environments ---
-# Pre-1.0 dm_control (PyPI --no-deps) for the patched `reacherloca` domain.
-dm_control==0.0.403778684
+# Modern dm_control + mujoco (python 3.11) for the vendored reacherloca task.
+dm_control==1.0.28
+mujoco==3.3.0
 # MiniGrid LoCA env (classic gym, not gymnasium).
 gym-minigrid==1.2.2
 gym==0.26.2
