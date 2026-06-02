@@ -1,19 +1,49 @@
-ale_py==0.9.0
-autorom[accept-rom-license]==0.6.1
-av
-chex
-colored_traceback
-einops
-elements>=3.19.1
-google-resumable-media>=2.7.2
-granular>=0.20.3
-ipdb
-jax[cuda12]==0.4.33
-jaxtyping
-ninjax>=3.5.1
-numpy<2  # DMLab: <2, MineRLv1.0: <1.24
-nvidia-cuda-nvcc-cu12<=12.2
+# DreamerV3 (JAX) dependencies, adapted for the Digital Research Alliance of
+# Canada (Compute Canada) wheelhouse. See SLURMs/install_venv.sh for how these
+# map onto `pip install --no-index` (wheelhouse) vs PyPI `--no-deps` fallbacks.
+#
+# Key deviations from upstream dreamerv3 for the Alliance environment:
+#   * jax pinned to 0.5.0 (matches the version this dreamerv3 is tested against in
+#     the Dockerfile AND is available in the Alliance wheelhouse). Installed with
+#     --no-index so the matching jaxlib + jax-cuda12 plugin/pjrt come from the
+#     wheelhouse under the loaded cuda/12.2 module. Do NOT use the [cuda12] extra
+#     here (that pulls nvidia-* CUDA wheels from PyPI) unless using the PyPI
+#     fallback documented in install_venv.sh.
+#   * nvidia-cuda-nvcc-cu12 dropped (only needed for the PyPI-CUDA fallback path).
+#   * dm_control pinned to 0.0.403778684 (pre-1.0, ctypes/MuJoCo 2.1.0) to match
+#     the LoCA_v3 / Dreamer_v1_Ali setup that registers the `reacherloca` domain.
+#     Installed from PyPI --no-deps (wheelhouse only has dm_control 1.0.28).
+#   * gym-minigrid + classic gym added for the MiniGrid LoCA env.
+
+# --- Core JAX stack (Alliance wheelhouse) ---
+jax==0.5.0
 optax
+chex
+jaxtyping
+numpy<2  # DMLab: <2, MineRLv1.0: <1.24
+
+# --- danijar libraries (PyPI, pure Python) ---
+elements>=3.19.1
+ninjax>=3.5.1
 portal>=3.5.0
 scope>=0.4.4
+granular>=0.20.3
+
+# --- utilities ---
+av
+colored_traceback
+einops
+google-resumable-media>=2.7.2
+ipdb
 tqdm
+
+# --- environments ---
+# Pre-1.0 dm_control (PyPI --no-deps) for the patched `reacherloca` domain.
+dm_control==0.0.403778684
+# MiniGrid LoCA env (classic gym, not gymnasium).
+gym-minigrid==1.2.2
+gym==0.26.2
+
+# --- optional env suites (not needed for the LoCA reacher+minigrid work) ---
+ale_py==0.9.0
+autorom[accept-rom-license]==0.6.1

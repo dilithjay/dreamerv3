@@ -1,0 +1,8 @@
+# reacher_loca env + lofo_v1 buffer.
+exp_name: reacher_loca_v1
+array: "0-2"
+time: "23:59:59"
+profile: mujoco   # mujoco (Reacher) or minigrid
+configs: reacher_loca
+overrides:
+  replay.variant: lofo_v1

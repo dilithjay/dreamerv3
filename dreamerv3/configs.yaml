@@ -35,15 +35,33 @@ defaults:
     minecraft: {size: [64, 64], break_speed: 100.0, logs: False, length: 36000}
     dmc: {size: [64, 64], repeat: 1, proprio: True, image: True, camera: -1}
     loconav: {size: [64, 64], repeat: 1, camera: -1}
+    minigridloca: {size: [64, 64], grid_size: 10, one_way_passage_size: 2, use_seed: True}
+    reacherloca: {size: [64, 64], camera: 0, one_way_wall_radius: 0.1, use_seed: True}
 
   replay:
     size: 5e6
     online: True
+    variant: fifo  # fifo | lofo_v1 | lofo_v2
+    lofo: {repr_key: image, radius: 0.05, count_thresh: 10, hash_dim: 32, per_bucket_capacity: 2000}
     fracs: {uniform: 1.0, priority: 0.0, recency: 0.0}
     prio: {exponent: 0.8, maxfrac: 0.5, initial: inf, zero_on_sample: True}
     priosignal: model
     recexp: 1.0
     chunksize: 1024
+
+  # Pretrained contrastive distance model used by LoFo buffers (lofo_v1/v2).
+  distance_model:
+    pretrain_steps: 100000
+    epochs: 5
+    repr_dim: 32
+    batch_size: 32
+    num_negative_samples: 128
+    lr: 1.0e-4
+
+  # Multi-phase LoCA curriculum (used by the train_loca run mode).
+  loca:
+    enabled: False
+    phases_steps: [300000, 1500000]
 
   run:
     steps: 1e10
@@ -195,6 +213,30 @@ loconav:
   env.loconav.repeat: 1
   run.train_ratio: 256
 
+# --- LoCA / LoFo experiment configs (mirror r2dreamer/configs/env/*) ---
+# Buffer variant is an override flag, e.g. --replay.variant=lofo_v1.
+
+minigrid:  # vanilla MiniGrid (phase-1-only; no LoCA transitions)
+  task: minigridloca_default
+  run: {steps: 1.8e6, envs: 8, train_ratio: 256}
+
+minigrid_loca:  # 2-phase LoCA MiniGrid
+  task: minigridloca_default
+  script: train_loca
+  loca: {enabled: True, phases_steps: [300000, 1500000]}
+  run: {steps: 1.8e6, envs: 8, train_ratio: 256}
+
+reacher:  # vanilla dm_control reacher (image obs)
+  task: dmc_reacher_easy
+  env.dmc.proprio: False
+  run: {steps: 2.5e6, envs: 8, train_ratio: 256}
+
+reacher_loca:  # 2-phase LoCA Reacher (patched dm_control `reacherloca` domain)
+  task: reacherloca_easy
+  script: train_loca
+  loca: {enabled: True, phases_steps: [1000000, 1500000]}
+  run: {steps: 2.5e6, envs: 8, train_ratio: 256}
+
 multicpu:
   batch_size: 12
   jax.mock_devices: 8
@@ -208,6 +250,8 @@ debug:
   jax: {platform: cpu, debug: True, prealloc: False}
   run: {envs: 4, report_every: 10, log_every: 5, save_every: 15, train_ratio: 8, debug: True}
   replay.size: 1e4
+  distance_model: {pretrain_steps: 200, epochs: 1}
+  loca.phases_steps: [200, 400]
   agent:
     .*\.bins: 5
     .*\.layers: 1

@@ -48,6 +48,20 @@ class Driver:
   def on_step(self, callback):
     self.callbacks.append(callback)
 
+  def call_env(self, method, *args, **kwargs):
+    """Call `method(*args, **kwargs)` on every underlying env and return the
+    results. Resolves through the wrapper stack via Wrapper.__getattr__.
+
+    Only safe to call from the top-level loop between driver(...) bursts, never
+    from an on_step callback (it must not interleave with _step's send/recv).
+    """
+    if self.parallel:
+      for pipe in self.pipes:
+        pipe.send(('call', method, args, kwargs))
+      return [self._receive(pipe) for pipe in self.pipes]
+    else:
+      return [getattr(env, method)(*args, **kwargs) for env in self.envs]
+
   def __call__(self, policy, steps=0, episodes=0):
     step, episode = 0, 0
     while step < steps or episode < episodes:
@@ -123,6 +137,11 @@ class Driver:
         elif msg == 'act_space':
           assert len(args) == 0
           pipe.send(('result', env.act_space))
+        elif msg == 'call':
+          assert len(args) == 3
+          method, cargs, ckwargs = args
+          result = getattr(env, method)(*cargs, **ckwargs)
+          pipe.send(('result', result))
         else:
           raise ValueError(f'Invalid message {msg}')
     except ConnectionResetError:

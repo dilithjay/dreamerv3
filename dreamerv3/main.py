@@ -63,12 +63,19 @@ def main(argv=None):
       consec_train=config.consec_train,
       consec_report=config.consec_report,
       replay_context=config.replay_context,
+      loca=config.loca,
   )
+
+  # For LoFo buffers, pretrain the frozen contrastive distance model once and
+  # thread its representation function into the train replay buffer.
+  repr_fn = None
+  if config.script in ('train', 'train_eval', 'train_loca'):
+    repr_fn = make_repr_fn(config)
 
   if config.script == 'train':
     embodied.run.train(
         bind(make_agent, config),
-        bind(make_replay, config, 'replay'),
+        bind(make_replay, config, 'replay', repr_fn=repr_fn),
         bind(make_env, config),
         bind(make_stream, config),
         bind(make_logger, config),
@@ -77,7 +84,18 @@ def main(argv=None):
   elif config.script == 'train_eval':
     embodied.run.train_eval(
         bind(make_agent, config),
-        bind(make_replay, config, 'replay'),
+        bind(make_replay, config, 'replay', repr_fn=repr_fn),
+        bind(make_replay, config, 'eval_replay', 'eval'),
+        bind(make_env, config),
+        bind(make_env, config),
+        bind(make_stream, config),
+        bind(make_logger, config),
+        args)
+
+  elif config.script == 'train_loca':
+    embodied.run.train_loca(
+        bind(make_agent, config),
+        bind(make_replay, config, 'replay', repr_fn=repr_fn),
         bind(make_replay, config, 'eval_replay', 'eval'),
         bind(make_env, config),
         bind(make_env, config),
@@ -180,7 +198,7 @@ def make_logger(config):
   return logger
 
 
-def make_replay(config, folder, mode='train'):
+def make_replay(config, folder, mode='train', repr_fn=None):
   batlen = config.batch_length if mode == 'train' else config.report_length
   consec = config.consec_train if mode == 'train' else config.consec_report
   capacity = config.replay.size if mode == 'train' else config.replay.size / 10
@@ -190,9 +208,25 @@ def make_replay(config, folder, mode='train'):
   directory = elements.Path(config.logdir) / folder
   if config.replicas > 1:
     directory /= f'{config.replica:05}'
+
+  variant = str(config.replay.get('variant', 'fifo')).lower()
+  is_lofo = variant in ('lofo_v1', 'lofo_v2') and mode == 'train'
+
   kwargs = dict(
       length=length, capacity=int(capacity), online=config.replay.online,
       chunksize=config.replay.chunksize, directory=directory)
+
+  if is_lofo:
+    # LoFo wants pure uniform sampling over the surviving (active) set, and the
+    # online queue would bypass that active set, so disable both extras.
+    kwargs['online'] = False
+    return embodied.LoFoReplay(
+        variant=variant, repr_fn=repr_fn, repr_key=config.replay.lofo.repr_key,
+        radius=config.replay.lofo.radius,
+        count_thresh=config.replay.lofo.count_thresh,
+        hash_dim=config.replay.lofo.hash_dim,
+        per_bucket_capacity=config.replay.lofo.per_bucket_capacity,
+        **kwargs)
 
   if config.replay.fracs.uniform < 1 and mode == 'train':
     assert config.jax.compute_dtype in ('bfloat16', 'float32'), (
@@ -207,6 +241,53 @@ def make_replay(config, folder, mode='train'):
     ), config.replay.fracs)
 
   return embodied.replay.Replay(**kwargs)
+
+
+def make_repr_fn(config):
+  """Pretrain the frozen contrastive distance model for LoFo buffers and return
+  its `get_representation`. Returns None for non-LoFo variants."""
+  variant = str(config.replay.get('variant', 'fifo')).lower()
+  if variant not in ('lofo_v1', 'lofo_v2'):
+    return None
+  from .state_distance import ContrastiveStateDistance
+
+  dm = config.distance_model
+  repr_key = config.replay.lofo.repr_key
+
+  # Spaces for the random agent (action sampling).
+  env = make_env(config, 0)
+  notlog = lambda k: not k.startswith('log/')
+  obs_space = {k: v for k, v in env.obs_space.items() if notlog(k)}
+  act_space = {k: v for k, v in env.act_space.items() if k != 'reset'}
+  env.close()
+
+  # Collect random-policy rollouts from a single (serial) env.
+  driver = embodied.Driver([bind(make_env, config, 0)], parallel=False)
+  images, episodes, ep = [], [], [0]
+
+  def grab(tran, worker):
+    images.append(np.asarray(tran[repr_key]))
+    episodes.append(ep[0])
+    if tran['is_last']:
+      ep[0] += 1
+
+  driver.on_step(grab)
+  rand = embodied.RandomAgent(obs_space, act_space)
+  driver.reset(rand.init_policy)
+  print(f'[distance_model] collecting {int(dm.pretrain_steps)} random steps')
+  driver(rand.policy, steps=int(dm.pretrain_steps))
+  driver.close()
+
+  size = config.env.get(config.task.split('_')[0], {}).get('size', [64, 64])
+  model = ContrastiveStateDistance(
+      repr_dim=int(dm.repr_dim), lr=float(dm.lr),
+      num_negative_samples=int(dm.num_negative_samples),
+      num_training_epochs=int(dm.epochs), batch_size=int(dm.batch_size),
+      image_hw=tuple(size), seed=config.seed)
+  model.train(np.stack(images), np.array(episodes))
+  if not config.script.endswith(('_env', '_replay')):
+    model.save(str(elements.Path(config.logdir) / 'distance_model.pkl'))
+  return model.get_representation
 
 
 def make_env(config, index, **overrides):
@@ -229,6 +310,8 @@ def make_env(config, index, **overrides):
       'langroom': 'embodied.envs.langroom:LangRoom',
       'procgen': 'embodied.envs.procgen:ProcGen',
       'bsuite': 'embodied.envs.bsuite:BSuite',
+      'minigridloca': 'embodied.envs.minigridloca:MinigridLoca',
+      'reacherloca': 'embodied.envs.reacherloca:ReacherLoca',
       'memmaze': lambda task, **kw: from_gym.FromGym(
           f'MemoryMaze-{task}-v0', **kw),
   }[suite]

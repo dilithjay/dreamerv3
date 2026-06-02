@@ -1,0 +1,8 @@
+# reacher env + fifo buffer.
+exp_name: reacher_fifo
+array: "0-2"
+time: "23:59:59"
+profile: mujoco   # mujoco (Reacher) or minigrid
+configs: reacher
+overrides:
+  replay.variant: fifo
