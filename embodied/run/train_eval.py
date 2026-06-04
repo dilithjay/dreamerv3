@@ -96,7 +96,8 @@ def train_eval(
     for _ in range(should_train(step)):
       with elements.timer.section('stream_next'):
         batch = next(stream_train)
-      carry_train[0], outs, mets = agent.train(carry_train[0], batch)
+      with elements.timer.section('train_update'):
+        carry_train[0], outs, mets = agent.train(carry_train[0], batch)
       train_fps.step(batch_steps)
       if 'replay' in outs:
         replay_train.update(outs['replay'])
@@ -149,7 +150,16 @@ def train_eval(
       logger.add(usage.stats(), prefix='usage')
       logger.add({'fps/policy': policy_fps.result()})
       logger.add({'fps/train': train_fps.result()})
-      logger.add({'timer': elements.timer.stats()['summary']})
+      tmets = elements.timer.stats()
+      logger.add({'timer': tmets['summary']})
+      # Explicit scalar timings (seconds), mirroring the LoCA_v3 / Dreamer_v1
+      # repos: per-sample insert time and per-batch total update time.
+      logger.add({
+          'time/insert_sample_mean': tmets.get('replay_add/mean', np.nan),
+          'time/insert_sample_sum': tmets.get('replay_add/sum', np.nan),
+          'time/total_update_mean': tmets.get('train_update/mean', np.nan),
+          'time/total_update_sum': tmets.get('train_update/sum', np.nan),
+      })
       logger.write()
 
     if should_save(step):
