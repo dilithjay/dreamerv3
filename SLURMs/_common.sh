@@ -17,14 +17,11 @@ sleep $(( (SLURM_ARRAY_TASK_ID % 10) * 3 ))
 module --force purge
 module load StdEnv/2023
 module load python/3.11
-module load cuda/12.2
+module load cuda/13
 module load ffmpeg
 module load glfw 2>/dev/null || true  # headless MuJoCo rendering (optional)
 
-# Source tree + venv. R2DREAMER-style layout: this file lives in <SRC>/SLURMs/.
-DREAMER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export DREAMER_SRC
-source "$DREAMER_SRC/.venv/bin/activate"
+source ".venv/bin/activate"
 
 # Headless GPU rendering via EGL for the modern mujoco pip package.
 export MUJOCO_GL=egl
@@ -41,13 +38,13 @@ export OMP_DYNAMIC=FALSE
 export OMP_PROC_BIND=close
 export OMP_PLACES=cores
 export SLURM_CPU_BIND=cores
+export JAX_PLATFORMS=cuda
 
 # JAX: let it see the GPU; don't preallocate the whole device so eval/env render
 # share the GPU. (Mirror upstream behavior; tune if needed.)
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 export WANDB_MODE=offline
-export PYTHONPATH="$DREAMER_SRC:${PYTHONPATH:-}"
 
 : "${SLURM_TMPDIR:=/tmp}"
 SEED="${SLURM_ARRAY_TASK_ID}"

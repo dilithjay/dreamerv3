@@ -20,7 +20,7 @@
 #   * gym-minigrid + classic gym added for the MiniGrid LoCA env.
 
 # --- Core JAX stack (Alliance wheelhouse) ---
-jax==0.5.0
+jax
 optax
 chex
 jaxtyping

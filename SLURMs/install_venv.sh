@@ -27,7 +27,6 @@
 set -e -o pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-export DREAMER_SRC="$REPO"
 cd "$REPO"
 
 # 1) Modules — must match SLURMs/_common.sh.
@@ -53,7 +52,7 @@ pip install --no-index --upgrade pip
 #    matching jaxlib + jax-cuda12 plugin/pjrt from the wheelhouse.
 echo "[install] Pass 1: Alliance wheelhouse (jax + numerics)"
 pip install --no-index \
-    "jax==0.5.0" \
+    "jax" \
     "optax" \
     "chex" \
     "jaxtyping" \
@@ -125,9 +124,6 @@ env.reset()
 img = env.physics.render(64, 64, camera_id=0)
 print(f"dm_control reacher.easy render ok; image shape = {img.shape}")
 
-# Smoke-test the vendored reacherloca task builds and steps.
-import os
-sys.path.insert(0, os.environ.get("DREAMER_SRC", "."))
 from embodied.envs import reacherloca_task
 renv = reacherloca_task.easy(random=0)
 renv.reset()

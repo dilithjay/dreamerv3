@@ -18,9 +18,9 @@ set -eo pipefail
 # =================================================================
 CONFIGS=(
     # --- MiniGrid (vanilla, no LoCA) ---
-    # configs/fifo_minigrid.yaml
-    # configs/v1_minigrid.yaml
-    # configs/v2_minigrid.yaml
+    configs/fifo_minigrid.yaml
+    configs/v1_minigrid.yaml
+    configs/v2_minigrid.yaml
 
     # --- MiniGrid LoCA (2-phase) ---
     # configs/fifo_minigrid_loca.yaml
@@ -34,12 +34,12 @@ CONFIGS=(
 
     # --- Reacher LoCA (2-phase) ---
     # configs/fifo_reacher_loca.yaml
-    configs/v1_reacher_loca.yaml
+    # configs/v1_reacher_loca.yaml
     # configs/v2_reacher_loca.yaml
 )
 
 # Optional overrides applied to EVERY config in this batch (extra flag tokens).
-OVERRIDE_ARRAY=""     # e.g. "0-4"
+OVERRIDE_ARRAY="0"     # e.g. "0-4"
 OVERRIDE_TIME=""      # e.g. "1-23:59:59"
 OVERRIDE_ARGS=()
 # OVERRIDE_ARGS+=(--replay.size 300000)
@@ -48,10 +48,9 @@ OVERRIDE_ARGS=()
 # Machinery below.
 # =================================================================
 SCRIPT_DIR="$( cd "$(dirname "${BASH_SOURCE[0]}")" && pwd )"
-DREAMER_SRC="$( cd "$SCRIPT_DIR/.." && pwd )"
 RESULTS_BASE="$HOME/projects/def-rsdjjana/dilith/dreamerv3/results"
 COMMON="$SCRIPT_DIR/_common.sh"
-VENV="$DREAMER_SRC/.venv"
+VENV=".venv"
 
 pick_python() {
     if [ -x "$VENV/bin/python3" ]; then echo "$VENV/bin/python3";
@@ -120,7 +119,7 @@ FINAL_DIR="$out_dir/\$SEED"
 mkdir -p "\$FINAL_DIR"
 cd "\$FINAL_DIR"
 
-python -u "\$DREAMER_SRC/dreamerv3/main.py" \\
+python -u "dreamerv3/main.py" \\
     --configs $YAML_CONFIGS \\
     $overrides_str \\
     --seed "\$SEED" \\
