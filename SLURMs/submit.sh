@@ -117,9 +117,8 @@ source "$COMMON"
 
 FINAL_DIR="$out_dir/\$SEED"
 mkdir -p "\$FINAL_DIR"
-cd "\$FINAL_DIR"
 
-python -u "dreamerv3/main.py" \\
+python -u dreamerv3/main.py \\
     --configs $YAML_CONFIGS \\
     $overrides_str \\
     --seed "\$SEED" \\
