@@ -51,7 +51,13 @@ def setup(
     elements.Path(xladump).mkdir()
     xlaflags.append(f'--xla_dump_to={xladump}')
     xlaflags.append('--xla_dump_hlo_as_long_text')
-  if gpuflags and platform == 'gpu':
+  # `platform` may be a comma-separated list (e.g. 'cuda,cpu' so the LoFo
+  # distance model can run on CPU while the agent runs on GPU), so test for
+  # membership rather than equality — otherwise these GPU flags (including the
+  # CUDA-graph disable below) silently vanish and reacher hits
+  # CUDA_ERROR_ILLEGAL_ADDRESS again.
+  gpu_platforms = set((platform or '').split(','))
+  if gpuflags and gpu_platforms & {'gpu', 'cuda'}:
     # xla_flags.append('--xla_gpu_enable_latency_hiding_scheduler=true')
     # xla_flags.append('--xla_gpu_enable_async_all_gather=true')
     # xla_flags.append('--xla_gpu_enable_async_reduce_scatter=true')
@@ -72,9 +78,13 @@ def setup(
         '--xla_gpu_enable_pipelined_reduce_scatter=true',
         '--xla_gpu_enable_reduce_scatter_combine_by_dim=false',
         '--xla_gpu_enable_triton_gemm=false',
-        '--xla_gpu_enable_triton_softmax_fusion=false',
         '--xla_gpu_enable_while_loop_double_buffering=true',
-        '--xla_gpu_graph_level=0',
+        # Disable CUDA graphs / command buffers (the source of the
+        # CUDA_ERROR_ILLEGAL_ADDRESS crash on first train step). The empty value
+        # records no command types. Replaces the legacy --xla_gpu_graph_level=0,
+        # which is deprecated in this XLA (jaxlib 0.5.1). Also dropped the removed
+        # --xla_gpu_enable_triton_softmax_fusion flag.
+        '--xla_gpu_enable_command_buffer=',
         '--xla_gpu_reduce_scatter_combine_threshold_bytes=67108864',
     ]
   if tpuflags and platform == 'tpu':

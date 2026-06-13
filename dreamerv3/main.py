@@ -70,6 +70,17 @@ def main(argv=None):
   # thread its representation function into the train replay buffer.
   repr_fn = None
   if config.script in ('train', 'train_eval', 'train_loca'):
+    variant = str(config.replay.get('variant', 'fifo')).lower()
+    if variant in ('lofo_v1', 'lofo_v2'):
+      # make_repr_fn pretrains the distance model on the GPU, which initializes the XLA backend. XLA_FLAGS (set by internal.setup, including the command-buffer disable that prevents reacher's CUDA_ERROR_ILLEGAL_ADDRESS) are only read at backend init, so setup() must run BEFORE make_repr_fn touches the GPU. Agent.__new__ calls setup() again later; for a single
+      # process it is idempotent.
+      from embodied.jax.agent import Options
+      from embodied.jax import internal
+      # Mirror Agent.__new__: setup() gets the jax-config keys that are not
+      # Options fields.
+      internal.setup(**{
+          k: v for k, v in config.jax.items()
+          if k not in Options.__dataclass_fields__})
     repr_fn = make_repr_fn(config)
 
   if config.script == 'train':
@@ -279,14 +290,23 @@ def make_repr_fn(config):
   driver.close()
 
   size = config.env.get(config.task.split('_')[0], {}).get('size', [64, 64])
-  model = ContrastiveStateDistance(
-      repr_dim=int(dm.repr_dim), lr=float(dm.lr),
-      num_negative_samples=int(dm.num_negative_samples),
-      num_training_epochs=int(dm.epochs), batch_size=int(dm.batch_size),
-      image_hw=tuple(size), seed=config.seed)
-  model.train(np.stack(images), np.array(episodes))
-  if not config.script.endswith(('_env', '_replay')):
-    model.save(str(elements.Path(config.logdir) / 'distance_model.pkl'))
+  # setup() ran before make_repr_fn, so the transfer guard is active. Run the
+  # whole one-time pretraining under transfer_guard('allow'): construction
+  # (PRNGKey + param init), train, and save all move data host<->device, and
+  # this single scope covers every one of them. (get_representation is returned
+  # and called later during the agent loop; it has its own allow-wrapper.)
+  import jax
+  with jax.transfer_guard('allow'):
+    model = ContrastiveStateDistance(
+        repr_dim=int(dm.repr_dim), lr=float(dm.lr),
+        num_negative_samples=int(dm.num_negative_samples),
+        num_training_epochs=int(dm.epochs), batch_size=int(dm.batch_size),
+        image_hw=tuple(size), seed=config.seed)
+    print(f'[distance_model] pretraining on {model._train_device}; '
+          f'inference on {model._device}')
+    model.train(np.stack(images), np.array(episodes))
+    if not config.script.endswith(('_env', '_replay')):
+      model.save(str(elements.Path(config.logdir) / 'distance_model.pkl'))
   return model.get_representation
 
 

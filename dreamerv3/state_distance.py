@@ -26,7 +26,25 @@ def _cpu_device():
   try:
     return jax.devices('cpu')[0]
   except RuntimeError:
-    return jax.devices()[0]
+    # No CPU backend (e.g. JAX_PLATFORMS=cuda only). Falling back to the
+    # accelerator means the per-insert repr calls contend with the agent's
+    # training pipeline and can stall the run, so make this visible.
+    dev = jax.devices()[0]
+    print(f'[distance_model] WARNING: no CPU JAX backend available; running '
+          f'the LoFo distance model on {dev}. Add "cpu" to JAX_PLATFORMS / the '
+          f'jax.platform config to avoid GPU contention.')
+    return dev
+
+
+def _gpu_device():
+  """Accelerator for one-time pretraining; falls back to the default device
+  (CPU) when no GPU backend is available."""
+  for name in ('gpu', 'cuda'):
+    try:
+      return jax.devices(name)[0]
+    except RuntimeError:
+      continue
+  return jax.devices()[0]
 
 
 def _init_params(rng, in_channels, image_hw, hidden_channels, mlp):
@@ -75,14 +93,19 @@ def _encode(params, x):
 
 
 def _to_nhwc_float(image):
-  """uint8/float (H,W,3) or (B,H,W,3) -> float32 (B,H,W,3) in [0,1]."""
-  x = jnp.asarray(image)
+  """uint8/float (H,W,3) or (B,H,W,3) -> float32 (B,H,W,3) in [0,1].
+
+  Stays in NumPy (host) so the only host->device transfer is the explicit
+  jax.device_put at the call site. Doing the /255 on a JAX array would force
+  an implicit scalar transfer, which DreamerV3's transfer guard disallows.
+  """
+  x = np.asarray(image)
   if x.ndim == 3:
     x = x[None]
-  if x.dtype == jnp.uint8 or x.dtype == np.uint8:
-    x = x.astype(jnp.float32) / 255.0
+  if x.dtype == np.uint8:
+    x = x.astype(np.float32) / 255.0
   else:
-    x = x.astype(jnp.float32)
+    x = x.astype(np.float32)
   return x
 
 
@@ -101,11 +124,22 @@ class ContrastiveStateDistance:
     self.batch_size = int(batch_size)
     self.image_hw = tuple(image_hw)
     self.out_dim = self.repr_dim
+    # Inference (get_representation) runs per inserted transition DURING agent
+    # training, so it lives on the inference device (CPU by default) to avoid
+    # contending with the agent for the GPU. Pretraining (train) is a one-time
+    # batched job that runs in make_repr_fn BEFORE the agent exists, when the GPU
+    # is idle — so it runs on the GPU (orders of magnitude faster) and the frozen
+    # params are moved to the inference device at the end of train().
     self._device = _cpu_device() if device == 'cpu' else jax.devices()[0]
+    self._train_device = _gpu_device()
     rng = jax.random.PRNGKey(seed)
     mlp = (512, 64, self.repr_dim)
-    params = _init_params(rng, 3, self.image_hw, (32, 64, 128, 256), mlp)
-    self.params = jax.device_put(params, self._device)
+    # _init_params multiplies device arrays by host scalars and device_put moves
+    # params to the GPU; both are transfers that DreamerV3's guard (now active
+    # because internal.setup runs before make_repr_fn) would reject, so allow them.
+    with jax.transfer_guard('allow'):
+      params = _init_params(rng, 3, self.image_hw, (32, 64, 128, 256), mlp)
+      self.params = jax.device_put(params, self._train_device)
     self._apply = jax.jit(_encode, device=self._device)
 
   @staticmethod
@@ -152,32 +186,49 @@ class ContrastiveStateDistance:
       running, seen = 0.0, 0
       for start in range(0, n, self.batch_size):
         bidx = perm[start:start + self.batch_size]
-        a = jax.device_put(_to_nhwc_float(anchors[bidx]), self._device)
-        p = jax.device_put(_to_nhwc_float(positives[bidx]), self._device)
         neg_idx = rng.integers(0, n, size=(len(bidx), num_neg))
         neg = _to_nhwc_float(anchors[neg_idx.reshape(-1)])
-        neg = jax.device_put(
-            neg.reshape((len(bidx), num_neg, *neg.shape[1:])), self._device)
-        params, opt_state, loss = step(params, opt_state, a, p, neg)
-        running += float(loss) * len(bidx)
+        # device_put (host->device) and float(loss) (device->host) are
+        # intentional transfers; DreamerV3's transfer guard would reject them.
+        with jax.transfer_guard('allow'):
+          a = jax.device_put(_to_nhwc_float(anchors[bidx]), self._train_device)
+          p = jax.device_put(_to_nhwc_float(positives[bidx]), self._train_device)
+          neg = jax.device_put(
+              neg.reshape((len(bidx), num_neg, *neg.shape[1:])),
+              self._train_device)
+          params, opt_state, loss = step(params, opt_state, a, p, neg)
+          running += float(loss) * len(bidx)
         seen += len(bidx)
       log_fn(f'[distance_model] epoch {epoch}: loss={running / max(seen, 1):.4f}')
-    self.params = params
+    # Freeze the trained model on the inference device (CPU) so per-insert
+    # get_representation calls don't contend with the agent for the GPU.
+    with jax.transfer_guard('allow'):
+      self.params = jax.device_put(params, self._device)
 
   def get_representation(self, obs):
     """obs: (H,W,3) or (B,H,W,3) uint8/float. Returns np.float32 (repr_dim,)
-    for a single obs or (B, repr_dim) for a batch."""
+    for a single obs or (B, repr_dim) for a batch.
+
+    Moving the image to the device and pulling the representation back to host
+    are intentional transfers, so they are run under transfer_guard('allow').
+    DreamerV3 otherwise sets the guard to disallow, which would reject both the
+    host->device device_put and the device->host np.asarray below.
+    """
     single = np.asarray(obs).ndim == 3
-    x = jax.device_put(_to_nhwc_float(obs), self._device)
-    out = np.asarray(self._apply(self.params, x))
+    with jax.transfer_guard('allow'):
+      x = jax.device_put(_to_nhwc_float(obs), self._device)
+      out = np.asarray(self._apply(self.params, x))
     return out[0] if single else out
 
   def save(self, path):
-    flat = jax.tree_util.tree_map(lambda x: np.asarray(x), self.params)
+    # np.asarray pulls params device->host; allow it under the transfer guard.
+    with jax.transfer_guard('allow'):
+      flat = jax.tree_util.tree_map(lambda x: np.asarray(x), self.params)
     with open(path, 'wb') as f:
       pickle.dump(flat, f)
 
   def load(self, path):
     with open(path, 'rb') as f:
       flat = pickle.load(f)
-    self.params = jax.device_put(flat, self._device)
+    with jax.transfer_guard('allow'):
+      self.params = jax.device_put(flat, self._device)

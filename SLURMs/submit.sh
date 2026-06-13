@@ -18,14 +18,14 @@ set -eo pipefail
 # =================================================================
 CONFIGS=(
     # --- MiniGrid (vanilla, no LoCA) ---
-    configs/fifo_minigrid.yaml
-    configs/v1_minigrid.yaml
-    configs/v2_minigrid.yaml
+    # configs/fifo_minigrid.yaml
+    # configs/v1_minigrid.yaml
+    # configs/v2_minigrid.yaml
 
     # --- MiniGrid LoCA (2-phase) ---
     # configs/fifo_minigrid_loca.yaml
     # configs/v1_minigrid_loca.yaml
-    # configs/v2_minigrid_loca.yaml
+    configs/v2_minigrid_loca.yaml
 
     # --- Reacher (vanilla, no LoCA) ---
     # configs/fifo_reacher.yaml
@@ -35,7 +35,7 @@ CONFIGS=(
     # --- Reacher LoCA (2-phase) ---
     # configs/fifo_reacher_loca.yaml
     # configs/v1_reacher_loca.yaml
-    # configs/v2_reacher_loca.yaml
+    configs/v2_reacher_loca.yaml
 )
 
 # Optional overrides applied to EVERY config in this batch (extra flag tokens).
@@ -103,11 +103,12 @@ submit_one() {
     cat > "$tmp_script" <<EOF
 #!/bin/bash
 #SBATCH --job-name=$exp_name
+#SBATCH --account=def-rsdjjana
 #SBATCH --time=$time
 #SBATCH --array=$array
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=64G
+#SBATCH --gpus=a100:1
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=124G
 #SBATCH --acctg-freq=task=1
 #SBATCH --output=$out_dir/%A-%a.out
 #SBATCH --error=$out_dir/%A-%a.err
